@@ -21,8 +21,11 @@ def create_character_from_image(image, thickness=0.15, height=2.0, subdivision_l
     # Link to scene FIRST before applying modifiers
     bpy.context.collection.objects.link(mesh_obj)
     
-    # Create and apply material with texture
-    apply_character_material(mesh_obj, image, alpha_channel)
+    # Generate normal map from the image
+    normal_map = generate_normal_map(img_array)
+    
+    # Create and apply material with texture and normal map
+    apply_character_material(mesh_obj, image, alpha_channel, normal_map)
     
     # Apply UV mapping (now that object is linked)
     apply_uvs(mesh_obj, image)
@@ -69,6 +72,86 @@ def extract_silhouette(img_array):
     silhouette_uint8 = silhouette.astype(np.uint8) * 255
     
     return silhouette_uint8.astype(np.uint8), alpha_channel
+
+
+def generate_normal_map(img_array):
+    """Generate a normal map from the 2D image using Sobel edge detection"""
+    
+    # Convert to grayscale if needed
+    if len(img_array.shape) == 3:
+        if img_array.shape[2] >= 3:
+            grayscale = np.dot(img_array[:, :, :3], [0.299, 0.587, 0.114])
+        else:
+            grayscale = img_array[:, :, 0]
+    else:
+        grayscale = img_array
+    
+    h, w = grayscale.shape
+    
+    # Simple Sobel edge detection for normal map
+    # Sobel X kernel
+    sobel_x = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=np.float32)
+    # Sobel Y kernel
+    sobel_y = np.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=np.float32)
+    
+    # Normalize grayscale to 0-1
+    grayscale = grayscale.astype(np.float32) / 255.0
+    
+    # Apply Sobel filters
+    gx = np.zeros_like(grayscale)
+    gy = np.zeros_like(grayscale)
+    
+    for i in range(1, h - 1):
+        for j in range(1, w - 1):
+            patch = grayscale[i-1:i+2, j-1:j+2]
+            gx[i, j] = np.sum(patch * sobel_x)
+            gy[i, j] = np.sum(patch * sobel_y)
+    
+    # Calculate normal map
+    # Normal points outward from surface
+    # X direction (left-right) from gx
+    # Y direction (up-down) from gy
+    # Z direction (depth) is always positive
+    
+    normal_map = np.zeros((h, w, 3), dtype=np.float32)
+    
+    # Set normal components
+    normal_map[:, :, 0] = gx  # Red channel = X gradient
+    normal_map[:, :, 1] = gy  # Green channel = Y gradient
+    normal_map[:, :, 2] = np.ones((h, w)) * 0.5  # Blue channel = Z (depth)
+    
+    # Normalize the normal vectors
+    magnitude = np.sqrt(normal_map[:, :, 0]**2 + normal_map[:, :, 1]**2 + normal_map[:, :, 2]**2)
+    magnitude = np.maximum(magnitude, 0.001)  # Avoid division by zero
+    
+    normal_map[:, :, 0] /= magnitude
+    normal_map[:, :, 1] /= magnitude
+    normal_map[:, :, 2] /= magnitude
+    
+    # Convert from [-1, 1] range to [0, 1] range for storage
+    normal_map = (normal_map + 1.0) / 2.0
+    normal_map = (normal_map * 255).astype(np.uint8)
+    
+    return normal_map
+
+
+def create_normal_map_image(name, normal_map_array):
+    """Create a Blender image from normal map array"""
+    
+    h, w = normal_map_array.shape[:2]
+    
+    # Create image
+    img = bpy.data.images.new(name, width=w, height=h)
+    
+    # Prepare pixel data (RGBA format)
+    pixels = np.zeros((h, w, 4), dtype=np.float32)
+    pixels[:, :, :3] = normal_map_array.astype(np.float32) / 255.0  # RGB
+    pixels[:, :, 3] = 1.0  # Alpha
+    
+    # Flatten and assign to image
+    img.pixels[:] = pixels.flatten()
+    
+    return img
 
 
 def create_mesh_from_silhouette(silhouette, height=2.0, thickness=0.15):
@@ -170,8 +253,8 @@ def apply_uvs(obj, image):
         bpy.ops.object.mode_set(mode='OBJECT')
 
 
-def apply_character_material(obj, image, alpha_channel):
-    """Apply material with the character image texture"""
+def apply_character_material(obj, image, alpha_channel, normal_map_array):
+    """Apply material with the character image texture and normal map"""
     
     mat = bpy.data.materials.new(name="Character_Material")
     mat.use_nodes = True
@@ -183,9 +266,20 @@ def apply_character_material(obj, image, alpha_channel):
     
     nodes.clear()
     
+    # Create normal map image
+    normal_map_img = create_normal_map_image("Normal_Map", normal_map_array)
+    
     # Create nodes
     img_node = nodes.new('ShaderNodeTexImage')
     img_node.image = image
+    img_node.label = "Color"
+    
+    normal_img_node = nodes.new('ShaderNodeTexImage')
+    normal_img_node.image = normal_map_img
+    normal_img_node.label = "Normal Map"
+    
+    normal_node = nodes.new('ShaderNodeNormalMap')
+    normal_node.inputs['Strength'].default_value = 1.0
     
     bsdf_node = nodes.new('ShaderNodeBsdfPrincipled')
     bsdf_node.inputs['Specular'].default_value = 0.1
@@ -193,12 +287,18 @@ def apply_character_material(obj, image, alpha_channel):
     
     output_node = nodes.new('ShaderNodeOutputMaterial')
     
-    # Connect nodes
+    # Connect nodes for color
     links.new(img_node.outputs['Color'], bsdf_node.inputs['Base Color'])
     
+    # Connect nodes for normal map
+    links.new(normal_img_node.outputs['Color'], normal_node.inputs['Color'])
+    links.new(normal_node.outputs['Normal'], bsdf_node.inputs['Normal'])
+    
+    # Connect alpha if available
     if alpha_channel is not None:
         links.new(img_node.outputs['Alpha'], bsdf_node.inputs['Alpha'])
     
+    # Connect to output
     links.new(bsdf_node.outputs['BSDF'], output_node.inputs['Surface'])
     
     # Add material to object
