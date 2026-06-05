@@ -18,3 +18,7 @@ Load a character image (PNG with transparency works best)
 Adjust settings (height, thickness, smoothness)
 Click "Convert to 3D"
 Your character is automatically textured and rigged!
+
+✅ Blender 3.0, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6
+✅ Blender 4.0, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6
+✅ Latest Blender versions
