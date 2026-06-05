@@ -18,11 +18,14 @@ def create_character_from_image(image, thickness=0.15, height=2.0, subdivision_l
     if mesh_obj is None:
         return None
     
-    # Apply UV mapping
-    apply_uvs(mesh_obj, image)
+    # Link to scene FIRST before applying modifiers
+    bpy.context.collection.objects.link(mesh_obj)
     
     # Create and apply material with texture
     apply_character_material(mesh_obj, image, alpha_channel)
+    
+    # Apply UV mapping (now that object is linked)
+    apply_uvs(mesh_obj, image)
     
     # Apply subdivision surface for smoother look
     if subdivision_levels > 0:
@@ -151,15 +154,20 @@ def apply_uvs(obj, image):
     bpy.context.view_layer.objects.active = obj
     obj.select_set(True)
     
-    # Create UV map
-    if not obj.data.uv_layers:
-        obj.data.uv_layers.new()
-    
-    # Switch to object mode and UV unwrap
-    bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.mesh.select_all(action='SELECT')
-    bpy.ops.uv.unwrap(method='ANGLE_BASED', margin=0.001)
-    bpy.ops.object.mode_set(mode='OBJECT')
+    try:
+        # Create UV map if it doesn't exist
+        if not obj.data.uv_layers:
+            obj.data.uv_layers.new()
+        
+        # Switch to edit mode and UV unwrap
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.mesh.select_all(action='SELECT')
+        bpy.ops.uv.unwrap(method='ANGLE_BASED', margin=0.001)
+        bpy.ops.object.mode_set(mode='OBJECT')
+    except Exception as e:
+        print(f"UV mapping error: {e}")
+        # Don't fail completely if UV fails
+        bpy.ops.object.mode_set(mode='OBJECT')
 
 
 def apply_character_material(obj, image, alpha_channel):
