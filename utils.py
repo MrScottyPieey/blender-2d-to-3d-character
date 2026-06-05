@@ -1,6 +1,5 @@
 import bpy
 import numpy as np
-from PIL import Image
 import bmesh
 from mathutils import Vector
 
@@ -64,7 +63,6 @@ def extract_silhouette(img_array):
     else:
         silhouette = img_array > 0.3
     
-    # Simple silhouette cleaning without opencv
     silhouette_uint8 = silhouette.astype(np.uint8) * 255
     
     return silhouette_uint8.astype(np.uint8), alpha_channel
@@ -79,19 +77,15 @@ def create_mesh_from_silhouette(silhouette, height=2.0, thickness=0.15):
     h, w = silhouette.shape
     
     # Find contour points from silhouette
-    contour_points = []
-    for y in range(h):
-        for x in range(w):
-            if silhouette[y, x] > 128:
-                contour_points.append((x, y))
+    contour = extract_contour(silhouette)
     
-    if not contour_points:
+    if not contour or len(contour) < 4:
         return None
     
     # Create vertices from contour
     vertices = []
     
-    for x, y in contour_points:
+    for x, y in contour:
         vx = (x / w) * 2 - 1
         vy = (y / h) * height
         
@@ -119,6 +113,36 @@ def create_mesh_from_silhouette(silhouette, height=2.0, thickness=0.15):
     mesh.update()
     
     return obj
+
+
+def extract_contour(silhouette):
+    """Extract contour points from silhouette using simple edge detection"""
+    h, w = silhouette.shape
+    contour = []
+    
+    # Find boundary pixels
+    for y in range(h):
+        for x in range(w):
+            if silhouette[y, x] > 128:
+                # Check if it's on the edge
+                is_edge = False
+                for dy in [-1, 0, 1]:
+                    for dx in [-1, 0, 1]:
+                        ny, nx = y + dy, x + dx
+                        if ny < 0 or ny >= h or nx < 0 or nx >= w:
+                            is_edge = True
+                        elif silhouette[ny, nx] <= 128:
+                            is_edge = True
+                
+                if is_edge:
+                    contour.append((x, y))
+    
+    # Reduce points for cleaner mesh
+    if len(contour) > 200:
+        step = len(contour) // 200
+        contour = contour[::step]
+    
+    return contour
 
 
 def apply_uvs(obj, image):
