@@ -3,7 +3,6 @@ import numpy as np
 from PIL import Image
 import bmesh
 from mathutils import Vector
-import cv2
 
 def create_character_from_image(image, thickness=0.15, height=2.0, subdivision_levels=2):
     """Create a 3D character model from a 2D image using silhouette extrusion"""
@@ -65,11 +64,8 @@ def extract_silhouette(img_array):
     else:
         silhouette = img_array > 0.3
     
-    # Apply morphological operations to clean silhouette
+    # Simple silhouette cleaning without opencv
     silhouette_uint8 = silhouette.astype(np.uint8) * 255
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    silhouette_uint8 = cv2.morphologyEx(silhouette_uint8, cv2.MORPH_CLOSE, kernel)
-    silhouette_uint8 = cv2.morphologyEx(silhouette_uint8, cv2.MORPH_OPEN, kernel)
     
     return silhouette_uint8.astype(np.uint8), alpha_channel
 
@@ -82,28 +78,20 @@ def create_mesh_from_silhouette(silhouette, height=2.0, thickness=0.15):
     
     h, w = silhouette.shape
     
-    # Find contour in silhouette
-    contours, _ = cv2.findContours(silhouette, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # Find contour points from silhouette
+    contour_points = []
+    for y in range(h):
+        for x in range(w):
+            if silhouette[y, x] > 128:
+                contour_points.append((x, y))
     
-    if not contours:
+    if not contour_points:
         return None
-    
-    # Get largest contour (main character)
-    contour = max(contours, key=cv2.contourArea)
-    contour = contour.squeeze()
-    
-    if len(contour.shape) == 1:
-        return None
-    
-    # Simplify contour
-    epsilon = 0.02 * cv2.arcLength(contour, True)
-    contour = cv2.approxPolyDP(contour, epsilon, True).squeeze()
     
     # Create vertices from contour
     vertices = []
     
-    for point in contour:
-        x, y = point
+    for x, y in contour_points:
         vx = (x / w) * 2 - 1
         vy = (y / h) * height
         
@@ -119,27 +107,13 @@ def create_mesh_from_silhouette(silhouette, height=2.0, thickness=0.15):
     faces = []
     n = len(vertices) // 2
     
-    for i in range(n):
-        next_i = (i + 1) % n
-        
-        # Front face
+    for i in range(n - 1):
         v0 = i * 2
-        v1 = next_i * 2
-        # Back face
-        v2 = next_i * 2 + 1
+        v1 = (i + 1) * 2
+        v2 = (i + 1) * 2 + 1
         v3 = i * 2 + 1
         
         faces.append((v0, v1, v2, v3))
-    
-    # Front cap
-    front_indices = [i * 2 for i in range(n)]
-    if len(front_indices) > 2:
-        faces.append(tuple(front_indices))
-    
-    # Back cap
-    back_indices = [i * 2 + 1 for i in range(n - 1, -1, -1)]
-    if len(back_indices) > 2:
-        faces.append(tuple(back_indices))
     
     mesh.from_pydata(vertices, [], faces)
     mesh.update()
